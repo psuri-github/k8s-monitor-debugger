@@ -2,24 +2,31 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"slices"
 
 	"k8s-monitor-debugger/pkg/kube"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1 "k8s.io/api/core/v1"
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func main() {
-	processKubeClients()
-	processMonitoringClients()
+	namespace := flag.String("namespace", "monitoring", "Kubernetes namespace to inspect")
+	flag.Parse()
+
+	if *namespace == "" {
+		log.Fatal("namespace cannot be empty")
+	}
+
+	processKubeClients(*namespace)
+	processMonitoringClients(*namespace)
 }
 
-func processMonitoringClients() {
-	namespace := "monitoring"
+func processMonitoringClients(namespace string) {
 	monitorclient, err := kube.GetMonitoringClient()
 	if err != nil {
 		log.Fatalf("failed to create monitoring client: %v", err)
@@ -62,21 +69,21 @@ func processMonitoringClients() {
 	for _, sm := range serviceMonitors.Items {
 		if len(sm.Spec.Selector.MatchLabels) == 0 {
 			if len(sm.Spec.Selector.MatchExpressions) > 0 {
-			        fmt.Println(sm.Name + " uses MatchExpressions; not supported yet")
+				fmt.Println(sm.Name + " uses MatchExpressions; not supported yet")
 			} else {
-			        fmt.Println(sm.Name + " : no selector")
+				fmt.Println(sm.Name + " : no selector")
 			}
 			continue
 		}
 		foundMatch := false
-	        for _, s := range services.Items {
+		for _, s := range services.Items {
 			if labelsMatch(sm.Spec.Selector.MatchLabels, s.Labels) {
 				fmt.Println(sm.Name + " : " + s.Name)
 				foundMatch = true
 			}
 		}
 		if !foundMatch {
-			fmt.Println(sm.Name + " : No matching Service Found" )
+			fmt.Println(sm.Name + " : No matching Service Found")
 		}
 	}
 	fmt.Println("############################################################")
@@ -96,18 +103,16 @@ func processMonitoringClients() {
 		if len(roguesvc) == 0 {
 			fmt.Println("sm : GREEN")
 		} else {
-			fmt.Println("sm : RED ROGUE SVCS ",  roguesvc)
+			fmt.Println("sm : RED ROGUE SVCS ", roguesvc)
 		}
 	}
 }
 
-func processKubeClients() {
+func processKubeClients(namespace string) {
 	client, err := kube.GetClient()
 	if err != nil {
 		log.Fatalf("failed to create kube client: %v", err)
 	}
-
-	namespace := "monitoring"
 
 	services, err := client.CoreV1().Services(namespace).List(context.Background(), metav1.ListOptions{})
 	if err != nil {
@@ -193,8 +198,8 @@ func fetchPortsForServices(services *v1.ServiceList) map[string][]string {
 	for _, s := range services.Items {
 		ports := []string{}
 		for _, port := range s.Spec.Ports {
-                       	ports = append(ports, port.Name)
-               	}
+			ports = append(ports, port.Name)
+		}
 		svcToPortMap[s.Name] = ports
 	}
 	return svcToPortMap
@@ -216,14 +221,14 @@ func fetchServicesForServiceMonitors(serviceMonitors *monitoringv1.ServiceMonito
 	smToservicesMap := make(map[string][]string)
 	for _, sm := range serviceMonitors.Items {
 		svcs := []string{}
-	        for _, s := range services.Items {
+		for _, s := range services.Items {
 			if labelsMatch(sm.Spec.Selector.MatchLabels, s.Labels) {
 				svcs = append(svcs, s.Name)
 			}
 		}
-		if len(svcs) ==0 {
-			fmt.Println(sm.Name + " : No matching Service Found" )
-		}else {
+		if len(svcs) == 0 {
+			fmt.Println(sm.Name + " : No matching Service Found")
+		} else {
 			smToservicesMap[sm.Name] = svcs
 		}
 	}

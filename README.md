@@ -30,6 +30,14 @@ I built this project to better understand:
 
 ## Current scope
 
+### Usage
+
+```bash
+go run . -namespace monitoring
+```
+
+If `-namespace` is omitted, the tool defaults to `monitoring`.
+
 ### Implemented
 
 - Connects to a Kubernetes cluster using kubeconfig
@@ -65,7 +73,6 @@ I built this project to better understand:
 ### Current limitations
 
 - `MatchExpressions` are detected but not yet supported
-- Namespace is currently hardcoded
 - Output is CLI text only
 - Code can still be refactored into cleaner analyzer packages
 
@@ -80,5 +87,7 @@ k8s-monitor-debugger/
 ├── main.go
 └── pkg/
     └── kube/
-        ├── client.go
-        └── monitoring_client.go
+        └── client.go
+```
+
+`pkg/kube/client.go` contains both the standard Kubernetes client setup and the Prometheus Operator monitoring client setup.
