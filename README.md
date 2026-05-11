@@ -1,93 +1,52 @@
-# k8s-monitor-debugger
+# k8s-monitor-debugger: Kubernetes Observability Wiring Debugger
 
-A small Go-based Kubernetes debugging tool for understanding how monitoring resources connect inside a namespace.
+`k8s-monitor-debugger` is a Go-based CLI tool for debugging how monitoring is wired inside a Kubernetes namespace.
 
-## What this project does
+It focuses on a practical failure mode: Prometheus scraping often breaks not because Prometheus is down, but because **Services, Pods, and ServiceMonitors do not line up the way operators expect**.
 
-Given a namespace, this tool currently helps answer:
+## What it checks
 
-- Which **Services** map to which **Pods**
-- Which **ServiceMonitors** map to which **Services**
-- Which **Services** have no matching Pods
-- Which **ServiceMonitors** have no matching Services
-- Which matched **ServiceMonitor -> Service** pairs have endpoint/port-name mismatches
+- Service → Pod mappings
+- ServiceMonitor → Service mappings
+- Services with no matching Pods
+- ServiceMonitors with no matching Services
+- Port-name mismatches between ServiceMonitors and Services
 
-This project is intentionally small and focused. It was built as a learning and debugging tool for Kubernetes resource relationships, especially around Prometheus Operator monitoring.
+## Why it is useful
 
----
+This tool helps debug issues such as:
 
-## Why I built this
+- a Service selector not matching the intended Pods
+- a ServiceMonitor selector not matching the intended Service
+- a ServiceMonitor endpoint port not matching a named Service port
 
-I built this project to better understand:
+Instead of checking each resource manually, it helps surface how the monitoring path is actually wired.
 
-- Kubernetes `client-go`
-- how Services select Pods using label selectors
-- how ServiceMonitors select Services using label selectors
-- how ServiceMonitor endpoint ports relate to Service port names
-- Go syntax and project structure in a real Kubernetes use case
+## Requirements
 
----
+- Access to a Kubernetes cluster through `kubeconfig`
+- Read access to the target namespace
+- Prometheus Operator resources present for ServiceMonitor analysis
 
-## Current scope
+## Usage
 
-### Usage
+Run with the default namespace (`monitoring`):
 
+```bash
+go run .
+```
+Or specify a namespace:
 ```bash
 go run . -namespace monitoring
 ```
+If no namespace is provided, the tool defaults to monitoring.
 
-If `-namespace` is omitted, the tool defaults to `monitoring`.
-
-### Implemented
-
-- Connects to a Kubernetes cluster using kubeconfig
-- Lists Services and Pods in a namespace
-- Prints Service details:
-  - name
-  - namespace
-  - selector
-  - labels
-  - type
-  - ports
-- Prints Pod details:
-  - name
-  - namespace
-  - labels
-- Builds **Service -> Pod** mappings using:
-  - `Service.Spec.Selector`
-  - `Pod.Labels`
-- Lists ServiceMonitors in a namespace
-- Prints ServiceMonitor details:
-  - name
-  - namespace
-  - selector
-  - endpoint ports
-- Builds **ServiceMonitor -> Service** mappings using:
-  - `ServiceMonitor.Spec.Selector.MatchLabels`
-  - `Service.Labels`
-- Extracts:
-  - Service port names
-  - ServiceMonitor endpoint port names
-- Compares endpoint ports vs Service port names to flag likely mismatches
-
-### Current limitations
-
-- `MatchExpressions` are detected but not yet supported
+## Current limitations
+- MatchExpressions are not yet supported
 - Output is CLI text only
-- Code can still be refactored into cleaner analyzer packages
+- The codebase can still be refactored into cleaner analyzer packages
 
----
-
-## Project structure
-
-```text
-k8s-monitor-debugger/
-├── go.mod
-├── go.sum
-├── main.go
-└── pkg/
-    └── kube/
-        └── client.go
-```
-
-`pkg/kube/client.go` contains both the standard Kubernetes client setup and the Prometheus Operator monitoring client setup.
+## Next steps
+- Support MatchExpressions
+- Improve reporting and output structure
+- Split logic into dedicated analyzer packages
