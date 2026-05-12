@@ -17,30 +17,39 @@ import (
 	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	monitoringclient "github.com/prometheus-operator/prometheus-operator/pkg/client/versioned"
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
 type report struct {
-	clusterEndpoint        string
-	namespace              string
-	services               *v1.ServiceList
-	pods                   *v1.PodList
-	serviceMonitors        *monitoringv1.ServiceMonitorList
-	serviceMonitorCount    int
-	servicePodMappings     []workloads.ServicePodMapping
-	serviceMonitorMappings []monitoringanalyzer.ServiceMonitorServiceMapping
-	serviceMonitorPorts    []monitoringanalyzer.ServiceMonitorPortStatus
+	clusterEndpoint           string
+	namespace                 string
+	services                  *v1.ServiceList
+	pods                      *v1.PodList
+	serviceMonitors           *monitoringv1.ServiceMonitorList
+	serviceMonitorSkipped     bool
+	serviceMonitorSkipReasons []string
+	serviceMonitorCount       int
+	servicePodMappings        []workloads.ServicePodMapping
+	serviceMonitorMappings    []monitoringanalyzer.ServiceMonitorServiceMapping
+	serviceMonitorPorts       []monitoringanalyzer.ServiceMonitorPortStatus
 }
 
 type jsonReport struct {
-	ClusterEndpoint            string       `json:"clusterEndpoint"`
-	Namespace                  string       `json:"namespace"`
-	Summary                    jsonSummary  `json:"summary"`
-	Problems                   jsonProblems `json:"problems"`
-	Mappings                   jsonMappings `json:"mappings"`
-	HealthyServiceMonitorPaths []string     `json:"healthyServiceMonitorPaths"`
-	Details                    *jsonDetails `json:"details,omitempty"`
+	ClusterEndpoint            string             `json:"clusterEndpoint"`
+	Namespace                  string             `json:"namespace"`
+	Summary                    jsonSummary        `json:"summary"`
+	Problems                   jsonProblems       `json:"problems"`
+	Mappings                   jsonMappings       `json:"mappings"`
+	HealthyServiceMonitorPaths []string           `json:"healthyServiceMonitorPaths"`
+	ServiceMonitorAnalysis     jsonAnalysisStatus `json:"serviceMonitorAnalysis"`
+	Details                    *jsonDetails       `json:"details,omitempty"`
+}
+
+type jsonAnalysisStatus struct {
+	Skipped bool     `json:"skipped"`
+	Reasons []string `json:"reasons,omitempty"`
 }
 
 type jsonSummary struct {
@@ -158,6 +167,21 @@ func buildReport(ctx context.Context, clusterEndpoint string, namespace string, 
 
 	serviceMonitors, err := monitorclient.MonitoringV1().ServiceMonitors(namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
+		if isServiceMonitorCRDMissing(err) {
+			return report{
+				clusterEndpoint:       clusterEndpoint,
+				namespace:             namespace,
+				services:              services,
+				pods:                  pods,
+				serviceMonitors:       &monitoringv1.ServiceMonitorList{},
+				serviceMonitorSkipped: true,
+				serviceMonitorSkipReasons: []string{
+					"ServiceMonitor CRD not found",
+					"Prometheus Operator resources may not be installed in this cluster",
+				},
+				servicePodMappings: workloads.MapServicesToPods(services, pods),
+			}, nil
+		}
 		return report{}, fmt.Errorf("failed to list serviceMonitors in namespace %q: %w", namespace, err)
 	}
 
@@ -182,6 +206,7 @@ func printReport(report report, verbose bool) {
 	fmt.Printf("Namespace: %s\n\n", report.namespace)
 
 	printSummary(report)
+	printServiceMonitorSkipped(report)
 	printProblems(report)
 	printMappings(report)
 	if verbose {
@@ -200,12 +225,24 @@ func printSummary(report report) {
 	fmt.Printf("- Unsupported ServiceMonitor selectors: %d\n\n", unsupportedServiceMonitorSelectorCount(report.serviceMonitorMappings))
 }
 
+func printServiceMonitorSkipped(report report) {
+	if !report.serviceMonitorSkipped {
+		return
+	}
+
+	fmt.Println("ServiceMonitor analysis skipped:")
+	printNameList(report.serviceMonitorSkipReasons)
+	fmt.Println()
+}
+
 func printProblems(report report) {
 	fmt.Println("Problems")
 	fmt.Println()
-	fmt.Println("ServiceMonitors with no matching Services")
-	printNameList(serviceMonitorsWithoutMatches(report.serviceMonitorMappings))
-	fmt.Println()
+	if !report.serviceMonitorSkipped {
+		fmt.Println("ServiceMonitors with no matching Services")
+		printNameList(serviceMonitorsWithoutMatches(report.serviceMonitorMappings))
+		fmt.Println()
+	}
 	fmt.Println("Services with no matching Pods")
 	printNameList(servicesWithoutPods(report.servicePodMappings))
 	fmt.Println()
@@ -226,21 +263,23 @@ func printMappings(report report) {
 		fmt.Println("- none")
 	}
 	fmt.Println()
-	fmt.Println("ServiceMonitor -> Service")
-	serviceMonitorMappingCount := 0
-	for _, mapping := range report.serviceMonitorMappings {
-		for _, serviceName := range mapping.ServiceNames {
-			fmt.Printf("- %s -> %s\n", mapping.ServiceMonitorName, serviceName)
-			serviceMonitorMappingCount++
+	if !report.serviceMonitorSkipped {
+		fmt.Println("ServiceMonitor -> Service")
+		serviceMonitorMappingCount := 0
+		for _, mapping := range report.serviceMonitorMappings {
+			for _, serviceName := range mapping.ServiceNames {
+				fmt.Printf("- %s -> %s\n", mapping.ServiceMonitorName, serviceName)
+				serviceMonitorMappingCount++
+			}
 		}
+		if serviceMonitorMappingCount == 0 {
+			fmt.Println("- none")
+		}
+		fmt.Println()
+		fmt.Println("Healthy ServiceMonitor paths")
+		printNameList(healthyServiceMonitorPaths(report.serviceMonitorPorts))
+		fmt.Println()
 	}
-	if serviceMonitorMappingCount == 0 {
-		fmt.Println("- none")
-	}
-	fmt.Println()
-	fmt.Println("Healthy ServiceMonitor paths")
-	printNameList(healthyServiceMonitorPaths(report.serviceMonitorPorts))
-	fmt.Println()
 }
 
 func printDetails(report report) {
@@ -250,6 +289,12 @@ func printDetails(report report) {
 	fmt.Println()
 	printPodDetails(report.pods)
 	fmt.Println()
+	if report.serviceMonitorSkipped {
+		fmt.Println("ServiceMonitors")
+		fmt.Println("ServiceMonitor analysis skipped:")
+		printNameList(report.serviceMonitorSkipReasons)
+		return
+	}
 	printServiceMonitorDetails(report.serviceMonitors)
 }
 
@@ -327,6 +372,10 @@ func buildJSONReport(report report, verbose bool) jsonReport {
 			ServiceMonitorToService: jsonServiceMonitorMappings(report.serviceMonitorMappings),
 		},
 		HealthyServiceMonitorPaths: healthyServiceMonitorPaths(report.serviceMonitorPorts),
+		ServiceMonitorAnalysis: jsonAnalysisStatus{
+			Skipped: report.serviceMonitorSkipped,
+			Reasons: report.serviceMonitorSkipReasons,
+		},
 	}
 
 	if verbose {
@@ -338,6 +387,10 @@ func buildJSONReport(report report, verbose bool) jsonReport {
 	}
 
 	return jsonReport
+}
+
+func isServiceMonitorCRDMissing(err error) bool {
+	return apierrors.IsNotFound(err)
 }
 
 func jsonServicePodMappings(mappings []workloads.ServicePodMapping) []jsonMapping {

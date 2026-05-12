@@ -26,7 +26,7 @@ Instead of checking each resource manually, it helps surface how the monitoring 
 
 - Access to a Kubernetes cluster through `kubeconfig`
 - Read access to the target namespace
-- Prometheus Operator resources present for ServiceMonitor analysis
+- Prometheus Operator resources present for ServiceMonitor analysis. If the ServiceMonitor CRD is missing, ServiceMonitor analysis is skipped and Service/Pod analysis still runs.
 
 ## Usage
 
@@ -69,6 +69,14 @@ Default output is a compact report with:
 
 Verbose output includes the same report plus detailed Services, Pods, and ServiceMonitors.
 JSON output uses the same report data in a structured format.
+
+If the ServiceMonitor CRD is not installed, the tool prints:
+
+```text
+ServiceMonitor analysis skipped:
+- ServiceMonitor CRD not found
+- Prometheus Operator resources may not be installed in this cluster
+```
 
 ## Current limitations
 - MatchExpressions are not yet supported
