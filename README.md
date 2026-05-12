@@ -47,6 +47,18 @@ Print detailed resource information with verbose mode:
 go run . -namespace monitoring -verbose
 ```
 
+Print machine-readable JSON:
+
+```bash
+go run . -namespace monitoring -output json
+```
+
+Include detailed resource information in JSON:
+
+```bash
+go run . -namespace monitoring -output json -verbose
+```
+
 Default output is a compact report with:
 
 - cluster endpoint and namespace
@@ -56,10 +68,10 @@ Default output is a compact report with:
 - healthy ServiceMonitor paths
 
 Verbose output includes the same report plus detailed Services, Pods, and ServiceMonitors.
+JSON output uses the same report data in a structured format.
 
 ## Current limitations
 - MatchExpressions are not yet supported
-- Output is CLI text only
 
 ## Next steps
 - Support MatchExpressions

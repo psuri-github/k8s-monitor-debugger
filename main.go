@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"strings"
 
@@ -31,13 +33,86 @@ type report struct {
 	serviceMonitorPorts    []monitoringanalyzer.ServiceMonitorPortStatus
 }
 
+type jsonReport struct {
+	ClusterEndpoint            string       `json:"clusterEndpoint"`
+	Namespace                  string       `json:"namespace"`
+	Summary                    jsonSummary  `json:"summary"`
+	Problems                   jsonProblems `json:"problems"`
+	Mappings                   jsonMappings `json:"mappings"`
+	HealthyServiceMonitorPaths []string     `json:"healthyServiceMonitorPaths"`
+	Details                    *jsonDetails `json:"details,omitempty"`
+}
+
+type jsonSummary struct {
+	ServicesScanned                       int `json:"servicesScanned"`
+	PodsScanned                           int `json:"podsScanned"`
+	ServiceMonitorsScanned                int `json:"serviceMonitorsScanned"`
+	ServicePodMatches                     int `json:"servicePodMatches"`
+	ServiceMonitorsWithMatchingServices   int `json:"serviceMonitorsWithMatchingServices"`
+	ServiceMonitorsWithNoMatchingServices int `json:"serviceMonitorsWithNoMatchingServices"`
+	UnsupportedServiceMonitorSelectors    int `json:"unsupportedServiceMonitorSelectors"`
+}
+
+type jsonProblems struct {
+	ServiceMonitorsWithNoMatchingServices []string `json:"serviceMonitorsWithNoMatchingServices"`
+	ServicesWithNoMatchingPods            []string `json:"servicesWithNoMatchingPods"`
+}
+
+type jsonMappings struct {
+	ServiceToPod            []jsonMapping `json:"serviceToPod"`
+	ServiceMonitorToService []jsonMapping `json:"serviceMonitorToService"`
+}
+
+type jsonMapping struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type jsonDetails struct {
+	Services        []jsonService        `json:"services"`
+	Pods            []jsonPod            `json:"pods"`
+	ServiceMonitors []jsonServiceMonitor `json:"serviceMonitors"`
+}
+
+type jsonService struct {
+	Name      string            `json:"name"`
+	Namespace string            `json:"namespace"`
+	Type      string            `json:"type"`
+	Selector  map[string]string `json:"selector"`
+	Labels    map[string]string `json:"labels"`
+	Ports     []jsonServicePort `json:"ports"`
+}
+
+type jsonServicePort struct {
+	Name       string `json:"name"`
+	Port       int32  `json:"port"`
+	TargetPort string `json:"targetPort"`
+}
+
+type jsonPod struct {
+	Name      string            `json:"name"`
+	Namespace string            `json:"namespace"`
+	Labels    map[string]string `json:"labels"`
+}
+
+type jsonServiceMonitor struct {
+	Name      string            `json:"name"`
+	Namespace string            `json:"namespace"`
+	Selector  map[string]string `json:"selector"`
+	Endpoints []string          `json:"endpoints"`
+}
+
 func main() {
 	namespace := flag.String("namespace", "monitoring", "Kubernetes namespace to inspect")
 	verbose := flag.Bool("verbose", false, "Print detailed Services, Pods, and ServiceMonitors")
+	output := flag.String("output", "text", "Output format: text or json")
 	flag.Parse()
 
 	if *namespace == "" {
 		log.Fatal("namespace cannot be empty")
+	}
+	if *output != "text" && *output != "json" {
+		log.Fatalf("unsupported output format %q: use text or json", *output)
 	}
 
 	config, err := kube.GetConfig()
@@ -58,6 +133,13 @@ func main() {
 	report, err := buildReport(context.Background(), config.Host, *namespace, client, monitorclient)
 	if err != nil {
 		log.Fatal(err)
+	}
+
+	if *output == "json" {
+		if err := printJSONReport(report, *verbose); err != nil {
+			log.Fatalf("failed to write json output: %v", err)
+		}
+		return
 	}
 
 	printReport(report, *verbose)
@@ -215,6 +297,127 @@ func printServiceMonitorDetails(serviceMonitors *monitoringv1.ServiceMonitorList
 		}
 		fmt.Println()
 	}
+}
+
+func printJSONReport(report report, verbose bool) error {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(buildJSONReport(report, verbose))
+}
+
+func buildJSONReport(report report, verbose bool) jsonReport {
+	jsonReport := jsonReport{
+		ClusterEndpoint: report.clusterEndpoint,
+		Namespace:       report.namespace,
+		Summary: jsonSummary{
+			ServicesScanned:                       len(report.services.Items),
+			PodsScanned:                           len(report.pods.Items),
+			ServiceMonitorsScanned:                report.serviceMonitorCount,
+			ServicePodMatches:                     servicePodMatchCount(report.servicePodMappings),
+			ServiceMonitorsWithMatchingServices:   serviceMonitorsWithMatchesCount(report.serviceMonitorMappings),
+			ServiceMonitorsWithNoMatchingServices: serviceMonitorsWithoutMatchesCount(report.serviceMonitorMappings),
+			UnsupportedServiceMonitorSelectors:    unsupportedServiceMonitorSelectorCount(report.serviceMonitorMappings),
+		},
+		Problems: jsonProblems{
+			ServiceMonitorsWithNoMatchingServices: serviceMonitorsWithoutMatches(report.serviceMonitorMappings),
+			ServicesWithNoMatchingPods:            servicesWithoutPods(report.servicePodMappings),
+		},
+		Mappings: jsonMappings{
+			ServiceToPod:            jsonServicePodMappings(report.servicePodMappings),
+			ServiceMonitorToService: jsonServiceMonitorMappings(report.serviceMonitorMappings),
+		},
+		HealthyServiceMonitorPaths: healthyServiceMonitorPaths(report.serviceMonitorPorts),
+	}
+
+	if verbose {
+		jsonReport.Details = &jsonDetails{
+			Services:        jsonServices(report.services),
+			Pods:            jsonPods(report.pods),
+			ServiceMonitors: jsonServiceMonitors(report.serviceMonitors),
+		}
+	}
+
+	return jsonReport
+}
+
+func jsonServicePodMappings(mappings []workloads.ServicePodMapping) []jsonMapping {
+	jsonMappings := []jsonMapping{}
+	for _, mapping := range mappings {
+		for _, podName := range mapping.PodNames {
+			jsonMappings = append(jsonMappings, jsonMapping{
+				From: mapping.ServiceName,
+				To:   podName,
+			})
+		}
+	}
+	return jsonMappings
+}
+
+func jsonServiceMonitorMappings(mappings []monitoringanalyzer.ServiceMonitorServiceMapping) []jsonMapping {
+	jsonMappings := []jsonMapping{}
+	for _, mapping := range mappings {
+		for _, serviceName := range mapping.ServiceNames {
+			jsonMappings = append(jsonMappings, jsonMapping{
+				From: mapping.ServiceMonitorName,
+				To:   serviceName,
+			})
+		}
+	}
+	return jsonMappings
+}
+
+func jsonServices(services *v1.ServiceList) []jsonService {
+	jsonServices := []jsonService{}
+	for _, service := range services.Items {
+		ports := []jsonServicePort{}
+		for _, port := range service.Spec.Ports {
+			ports = append(ports, jsonServicePort{
+				Name:       port.Name,
+				Port:       port.Port,
+				TargetPort: port.TargetPort.String(),
+			})
+		}
+
+		jsonServices = append(jsonServices, jsonService{
+			Name:      service.Name,
+			Namespace: service.Namespace,
+			Type:      string(service.Spec.Type),
+			Selector:  service.Spec.Selector,
+			Labels:    service.Labels,
+			Ports:     ports,
+		})
+	}
+	return jsonServices
+}
+
+func jsonPods(pods *v1.PodList) []jsonPod {
+	jsonPods := []jsonPod{}
+	for _, pod := range pods.Items {
+		jsonPods = append(jsonPods, jsonPod{
+			Name:      pod.Name,
+			Namespace: pod.Namespace,
+			Labels:    pod.Labels,
+		})
+	}
+	return jsonPods
+}
+
+func jsonServiceMonitors(serviceMonitors *monitoringv1.ServiceMonitorList) []jsonServiceMonitor {
+	jsonServiceMonitors := []jsonServiceMonitor{}
+	for _, serviceMonitor := range serviceMonitors.Items {
+		endpoints := []string{}
+		for _, endpoint := range serviceMonitor.Spec.Endpoints {
+			endpoints = append(endpoints, endpoint.Port)
+		}
+
+		jsonServiceMonitors = append(jsonServiceMonitors, jsonServiceMonitor{
+			Name:      serviceMonitor.Name,
+			Namespace: serviceMonitor.Namespace,
+			Selector:  serviceMonitor.Spec.Selector.MatchLabels,
+			Endpoints: endpoints,
+		})
+	}
+	return jsonServiceMonitors
 }
 
 func printNameList(names []string) {
