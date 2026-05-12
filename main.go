@@ -5,12 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"slices"
 
+	monitoringanalyzer "k8s-monitor-debugger/pkg/analyzer/monitoring"
+	"k8s-monitor-debugger/pkg/analyzer/workloads"
 	"k8s-monitor-debugger/pkg/kube"
 
-	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
-	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -66,44 +65,29 @@ func processMonitoringClients(namespace string) {
 	fmt.Println("############################################################")
 
 	fmt.Println("ServiceMonitor -> Service Mapping")
-	for _, sm := range serviceMonitors.Items {
-		if len(sm.Spec.Selector.MatchLabels) == 0 {
-			if len(sm.Spec.Selector.MatchExpressions) > 0 {
-				fmt.Println(sm.Name + " uses MatchExpressions; not supported yet")
+	for _, mapping := range monitoringanalyzer.MapServiceMonitorsToServices(serviceMonitors, services) {
+		if mapping.NoSelector {
+			if mapping.UnsupportedMatchExpression {
+				fmt.Println(mapping.ServiceMonitorName + " uses MatchExpressions; not supported yet")
 			} else {
-				fmt.Println(sm.Name + " : no selector")
+				fmt.Println(mapping.ServiceMonitorName + " : no selector")
 			}
 			continue
 		}
-		foundMatch := false
-		for _, s := range services.Items {
-			if labelsMatch(sm.Spec.Selector.MatchLabels, s.Labels) {
-				fmt.Println(sm.Name + " : " + s.Name)
-				foundMatch = true
-			}
+		for _, serviceName := range mapping.ServiceNames {
+			fmt.Println(mapping.ServiceMonitorName + " : " + serviceName)
 		}
-		if !foundMatch {
-			fmt.Println(sm.Name + " : No matching Service Found")
+		if len(mapping.ServiceNames) == 0 {
+			fmt.Println(mapping.ServiceMonitorName + " : No matching Service Found")
 		}
 	}
 	fmt.Println("############################################################")
 	fmt.Println()
-	smToendpointMap := fetchEndpointsForServiceMonitors(serviceMonitors)
-	smToservicesMap := fetchServicesForServiceMonitors(serviceMonitors, services)
-	svcToPortMap := fetchPortsForServices(services)
-	for sm, svcList := range smToservicesMap {
-		roguesvc := []string{}
-		endpoints := smToendpointMap[sm]
-		for _, svc := range svcList {
-			ports := svcToPortMap[svc]
-			if !sameIgnoringOrder(endpoints, ports) {
-				roguesvc = append(roguesvc, svc)
-			}
-		}
-		if len(roguesvc) == 0 {
-			fmt.Println("sm : GREEN")
+	for _, status := range monitoringanalyzer.CheckServiceMonitorPorts(serviceMonitors, services) {
+		if len(status.RogueServices) == 0 {
+			fmt.Println(status.ServiceMonitorName + " : GREEN")
 		} else {
-			fmt.Println("sm : RED ROGUE SVCS ", roguesvc)
+			fmt.Println(status.ServiceMonitorName+" : RED ROGUE SVCS ", status.RogueServices)
 		}
 	}
 }
@@ -163,88 +147,18 @@ func processKubeClients(namespace string) {
 	fmt.Println("############################################################")
 
 	fmt.Println("Service -> POD Mapping")
-	for _, s := range services.Items {
-		if len(s.Spec.Selector) == 0 {
-			fmt.Println(s.Name + " : no selector")
+	for _, mapping := range workloads.MapServicesToPods(services, pods) {
+		if mapping.NoSelector {
+			fmt.Println(mapping.ServiceName + " : no selector")
 			continue
 		}
-		foundMatch := false
-		for _, p := range pods.Items {
-			if labelsMatch(s.Spec.Selector, p.Labels) {
-				fmt.Println(s.Name + " : " + p.Name)
-				foundMatch = true
-			}
+		for _, podName := range mapping.PodNames {
+			fmt.Println(mapping.ServiceName + " : " + podName)
 		}
-		if !foundMatch {
-			fmt.Println(s.Name + " : No matching POD found")
+		if len(mapping.PodNames) == 0 {
+			fmt.Println(mapping.ServiceName + " : No matching POD found")
 		}
 	}
 	fmt.Println("############################################################")
 	fmt.Println()
-}
-
-func labelsMatch(selector map[string]string, labels map[string]string) bool {
-	for key, expectedValue := range selector {
-		actualValue, exists := labels[key]
-		if !exists || actualValue != expectedValue {
-			return false
-		}
-	}
-	return true
-}
-
-func fetchPortsForServices(services *v1.ServiceList) map[string][]string {
-	svcToPortMap := make(map[string][]string)
-	for _, s := range services.Items {
-		ports := []string{}
-		for _, port := range s.Spec.Ports {
-			ports = append(ports, port.Name)
-		}
-		svcToPortMap[s.Name] = ports
-	}
-	return svcToPortMap
-}
-
-func fetchEndpointsForServiceMonitors(serviceMonitors *monitoringv1.ServiceMonitorList) map[string][]string {
-	smToendpointsMap := make(map[string][]string)
-	for _, sm := range serviceMonitors.Items {
-		endpoints := []string{}
-		for _, endpoint := range sm.Spec.Endpoints {
-			endpoints = append(endpoints, endpoint.Port)
-		}
-		smToendpointsMap[sm.Name] = endpoints
-	}
-	return smToendpointsMap
-}
-
-func fetchServicesForServiceMonitors(serviceMonitors *monitoringv1.ServiceMonitorList, services *v1.ServiceList) map[string][]string {
-	smToservicesMap := make(map[string][]string)
-	for _, sm := range serviceMonitors.Items {
-		svcs := []string{}
-		for _, s := range services.Items {
-			if labelsMatch(sm.Spec.Selector.MatchLabels, s.Labels) {
-				svcs = append(svcs, s.Name)
-			}
-		}
-		if len(svcs) == 0 {
-			fmt.Println(sm.Name + " : No matching Service Found")
-		} else {
-			smToservicesMap[sm.Name] = svcs
-		}
-	}
-	return smToservicesMap
-}
-
-func sameIgnoringOrder(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-
-	aCopy := slices.Clone(a)
-	bCopy := slices.Clone(b)
-
-	slices.Sort(aCopy)
-	slices.Sort(bCopy)
-
-	return slices.Equal(aCopy, bCopy)
 }

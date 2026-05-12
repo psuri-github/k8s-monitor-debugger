@@ -44,9 +44,21 @@ If no namespace is provided, the tool defaults to monitoring.
 ## Current limitations
 - MatchExpressions are not yet supported
 - Output is CLI text only
-- The codebase can still be refactored into cleaner analyzer packages
 
 ## Next steps
 - Support MatchExpressions
 - Improve reporting and output structure
-- Split logic into dedicated analyzer packages
+
+## Project structure
+
+```text
+k8s-monitor-debugger/
+├── main.go
+├── pkg/
+│   ├── analyzer/
+│   │   ├── labels/
+│   │   ├── monitoring/
+│   │   └── workloads/
+│   └── kube/
+└── README.md
+```
