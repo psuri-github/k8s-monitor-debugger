@@ -1,14 +1,13 @@
 package kube
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/rest"
 	monitoringclient "github.com/prometheus-operator/prometheus-operator/pkg/client/versioned"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 func GetClient() (*kubernetes.Clientset, error) {
@@ -16,7 +15,6 @@ func GetClient() (*kubernetes.Clientset, error) {
 	if err != nil {
 		return nil, err
 	}
-	fmt.Println("API SERVER ENDPOINT : " + config.Host)
 	return kubernetes.NewForConfig(config)
 }
 

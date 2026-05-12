@@ -41,13 +41,21 @@ go run . -namespace monitoring
 ```
 If no namespace is provided, the tool defaults to monitoring.
 
+Default output is a compact report with:
+
+- cluster endpoint and namespace
+- scan summary counts
+- problem sections for missing ServiceMonitor and Service matches
+- Service → Pod and ServiceMonitor → Service mappings
+- healthy ServiceMonitor paths
+
 ## Current limitations
 - MatchExpressions are not yet supported
 - Output is CLI text only
 
 ## Next steps
 - Support MatchExpressions
-- Improve reporting and output structure
+- Add verbose output mode
 
 ## Project structure
 
