@@ -41,6 +41,12 @@ go run . -namespace monitoring
 ```
 If no namespace is provided, the tool defaults to monitoring.
 
+Print detailed resource information with verbose mode:
+
+```bash
+go run . -namespace monitoring -verbose
+```
+
 Default output is a compact report with:
 
 - cluster endpoint and namespace
@@ -49,13 +55,14 @@ Default output is a compact report with:
 - Service → Pod and ServiceMonitor → Service mappings
 - healthy ServiceMonitor paths
 
+Verbose output includes the same report plus detailed Services, Pods, and ServiceMonitors.
+
 ## Current limitations
 - MatchExpressions are not yet supported
 - Output is CLI text only
 
 ## Next steps
 - Support MatchExpressions
-- Add verbose output mode
 
 ## Project structure
 

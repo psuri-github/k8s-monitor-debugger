@@ -5,11 +5,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"sort"
+	"strings"
 
 	monitoringanalyzer "k8s-monitor-debugger/pkg/analyzer/monitoring"
 	"k8s-monitor-debugger/pkg/analyzer/workloads"
 	"k8s-monitor-debugger/pkg/kube"
 
+	monitoringv1 "github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring/v1"
 	monitoringclient "github.com/prometheus-operator/prometheus-operator/pkg/client/versioned"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -21,6 +24,7 @@ type report struct {
 	namespace              string
 	services               *v1.ServiceList
 	pods                   *v1.PodList
+	serviceMonitors        *monitoringv1.ServiceMonitorList
 	serviceMonitorCount    int
 	servicePodMappings     []workloads.ServicePodMapping
 	serviceMonitorMappings []monitoringanalyzer.ServiceMonitorServiceMapping
@@ -29,6 +33,7 @@ type report struct {
 
 func main() {
 	namespace := flag.String("namespace", "monitoring", "Kubernetes namespace to inspect")
+	verbose := flag.Bool("verbose", false, "Print detailed Services, Pods, and ServiceMonitors")
 	flag.Parse()
 
 	if *namespace == "" {
@@ -55,7 +60,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	printReport(report)
+	printReport(report, *verbose)
 }
 
 func buildReport(ctx context.Context, clusterEndpoint string, namespace string, client *kubernetes.Clientset, monitorclient *monitoringclient.Clientset) (report, error) {
@@ -79,6 +84,7 @@ func buildReport(ctx context.Context, clusterEndpoint string, namespace string, 
 		namespace:              namespace,
 		services:               services,
 		pods:                   pods,
+		serviceMonitors:        serviceMonitors,
 		serviceMonitorCount:    len(serviceMonitors.Items),
 		servicePodMappings:     workloads.MapServicesToPods(services, pods),
 		serviceMonitorMappings: monitoringanalyzer.MapServiceMonitorsToServices(serviceMonitors, services),
@@ -86,14 +92,19 @@ func buildReport(ctx context.Context, clusterEndpoint string, namespace string, 
 	}, nil
 }
 
-func printReport(report report) {
-	fmt.Println("k8s-monitor-debugger")
+func printReport(report report, verbose bool) {
+	if !verbose {
+		fmt.Println("k8s-monitor-debugger")
+	}
 	fmt.Printf("Cluster endpoint: %s\n", report.clusterEndpoint)
 	fmt.Printf("Namespace: %s\n\n", report.namespace)
 
 	printSummary(report)
 	printProblems(report)
 	printMappings(report)
+	if verbose {
+		printDetails(report)
+	}
 }
 
 func printSummary(report report) {
@@ -147,6 +158,63 @@ func printMappings(report report) {
 	fmt.Println()
 	fmt.Println("Healthy ServiceMonitor paths")
 	printNameList(healthyServiceMonitorPaths(report.serviceMonitorPorts))
+	fmt.Println()
+}
+
+func printDetails(report report) {
+	fmt.Println("Details")
+	fmt.Println()
+	printServiceDetails(report.services)
+	fmt.Println()
+	printPodDetails(report.pods)
+	fmt.Println()
+	printServiceMonitorDetails(report.serviceMonitors)
+}
+
+func printServiceDetails(services *v1.ServiceList) {
+	fmt.Println("Services")
+	for _, service := range services.Items {
+		fmt.Printf("- %s\n", service.Name)
+		fmt.Printf("  namespace: %s\n", service.Namespace)
+		fmt.Printf("  type: %s\n", service.Spec.Type)
+		fmt.Printf("  selector: %s\n", formatStringMap(service.Spec.Selector))
+		fmt.Printf("  labels: %s\n", formatStringMap(service.Labels))
+		fmt.Println("  ports:")
+		if len(service.Spec.Ports) == 0 {
+			fmt.Println("    - none")
+		}
+		for _, port := range service.Spec.Ports {
+			fmt.Printf("    - name=%s port=%d targetPort=%s\n", port.Name, port.Port, port.TargetPort.String())
+		}
+		fmt.Println()
+	}
+}
+
+func printPodDetails(pods *v1.PodList) {
+	fmt.Println("Pods")
+	for _, pod := range pods.Items {
+		fmt.Printf("- %s\n", pod.Name)
+		fmt.Printf("  namespace: %s\n", pod.Namespace)
+		fmt.Printf("  labels: %s\n", formatStringMap(pod.Labels))
+		fmt.Println()
+	}
+}
+
+func printServiceMonitorDetails(serviceMonitors *monitoringv1.ServiceMonitorList) {
+	fmt.Println("ServiceMonitors")
+	for _, serviceMonitor := range serviceMonitors.Items {
+		fmt.Printf("- %s\n", serviceMonitor.Name)
+		fmt.Printf("  namespace: %s\n", serviceMonitor.Namespace)
+		fmt.Printf("  selector: %s\n", formatStringMap(serviceMonitor.Spec.Selector.MatchLabels))
+		fmt.Println("  endpoints:")
+		if len(serviceMonitor.Spec.Endpoints) == 0 {
+			fmt.Println("    - none")
+		}
+		for _, endpoint := range serviceMonitor.Spec.Endpoints {
+			fmt.Printf("    - %s\n", endpoint.Port)
+		}
+		fmt.Println()
+	}
 }
 
 func printNameList(names []string) {
@@ -220,4 +288,22 @@ func healthyServiceMonitorPaths(statuses []monitoringanalyzer.ServiceMonitorPort
 		}
 	}
 	return names
+}
+
+func formatStringMap(values map[string]string) string {
+	if len(values) == 0 {
+		return "none"
+	}
+
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s=%s", key, values[key]))
+	}
+	return strings.Join(parts, ", ")
 }
