@@ -78,6 +78,12 @@ ServiceMonitor analysis skipped:
 - Prometheus Operator resources may not be installed in this cluster
 ```
 
+## Exit status
+
+- `0`: successful run, no issues found
+- `1`: successful run, but mismatches, warnings, or issues were found
+- `2`: tool or infrastructure failure prevented meaningful analysis
+
 ## Current limitations
 - MatchExpressions are not yet supported
 

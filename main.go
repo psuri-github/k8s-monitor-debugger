@@ -22,6 +22,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+const (
+	exitOK          = 0
+	exitIssuesFound = 1
+	exitToolFailure = 2
+)
+
 type report struct {
 	clusterEndpoint           string
 	namespace                 string
@@ -118,40 +124,41 @@ func main() {
 	flag.Parse()
 
 	if *namespace == "" {
-		log.Fatal("namespace cannot be empty")
+		exitWithToolFailure("namespace cannot be empty")
 	}
 	if *output != "text" && *output != "json" {
-		log.Fatalf("unsupported output format %q: use text or json", *output)
+		exitWithToolFailure("unsupported output format %q: use text or json", *output)
 	}
 
 	config, err := kube.GetConfig()
 	if err != nil {
-		log.Fatalf("failed to create kube config: %v", err)
+		exitWithToolFailure("failed to create kube config: %v", err)
 	}
 
 	client, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		log.Fatalf("failed to create kube client: %v", err)
+		exitWithToolFailure("failed to create kube client: %v", err)
 	}
 
 	monitorclient, err := monitoringclient.NewForConfig(config)
 	if err != nil {
-		log.Fatalf("failed to create monitoring client: %v", err)
+		exitWithToolFailure("failed to create monitoring client: %v", err)
 	}
 
 	report, err := buildReport(context.Background(), config.Host, *namespace, client, monitorclient)
 	if err != nil {
-		log.Fatal(err)
+		exitWithToolFailure("%v", err)
 	}
 
 	if *output == "json" {
 		if err := printJSONReport(report, *verbose); err != nil {
-			log.Fatalf("failed to write json output: %v", err)
+			exitWithToolFailure("failed to write json output: %v", err)
 		}
-		return
+		os.Exit(exitCodeForReport(report))
 	}
 
 	printReport(report, *verbose)
+	os.Exit(exitCodeForReport(report))
 }
 
 func buildReport(ctx context.Context, clusterEndpoint string, namespace string, client *kubernetes.Clientset, monitorclient *monitoringclient.Clientset) (report, error) {
@@ -391,6 +398,39 @@ func buildJSONReport(report report, verbose bool) jsonReport {
 
 func isServiceMonitorCRDMissing(err error) bool {
 	return apierrors.IsNotFound(err)
+}
+
+func exitCodeForReport(report report) int {
+	if reportHasIssues(report) {
+		return exitIssuesFound
+	}
+	return exitOK
+}
+
+func reportHasIssues(report report) bool {
+	if report.serviceMonitorSkipped {
+		return true
+	}
+	if len(servicesWithoutPods(report.servicePodMappings)) > 0 {
+		return true
+	}
+	if len(serviceMonitorsWithoutMatches(report.serviceMonitorMappings)) > 0 {
+		return true
+	}
+	if unsupportedServiceMonitorSelectorCount(report.serviceMonitorMappings) > 0 {
+		return true
+	}
+	for _, status := range report.serviceMonitorPorts {
+		if len(status.RogueServices) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func exitWithToolFailure(format string, args ...any) {
+	log.Printf(format, args...)
+	os.Exit(exitToolFailure)
 }
 
 func jsonServicePodMappings(mappings []workloads.ServicePodMapping) []jsonMapping {
