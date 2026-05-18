@@ -204,3 +204,12 @@ k8s-monitor-debugger/
 │   └── kube/
 └── README.md
 ```
+
+## Release
+Pre-release artifacts for v0.1.0 are available under GitHub Releases.
+
+Quick start
+1. Download the archive for your platform
+2. Extract the binary
+3. Run:
+   ./kubectl-mondbg -namespace monitoring
