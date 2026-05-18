@@ -1,4 +1,5 @@
 # k8s-monitor-debugger: Kubernetes Observability Wiring Debugger
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 `k8s-monitor-debugger` is a Go-based CLI tool for debugging how monitoring is wired inside a Kubernetes namespace.
 
